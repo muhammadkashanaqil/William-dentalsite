@@ -1,6 +1,17 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@/lib/supabase/server";
+import { createServerClient, createServerSupabaseClient } from "@/lib/supabase/server";
 import { updateGoogleEvent, deleteGoogleEvent, createGoogleEvent } from "@/lib/google-calendar";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+async function getClient() {
+  try {
+    return await createServerSupabaseClient();
+  } catch {
+    return createServerClient();
+  }
+}
 
 // POST retry calendar sync for an appointment
 export async function POST(
@@ -9,15 +20,21 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-    const supabase = createServerClient();
+    const supabase = await getClient();
 
-    const { data: appt, error: fetchErr } = await supabase
+    let { data: appt, error: fetchErr } = await supabase
       .from("appointments")
       .select("*")
       .eq("id", id)
-      .single();
+      .maybeSingle();
 
     if (fetchErr || !appt) {
+      const fallbackClient = createServerClient();
+      const res = await fallbackClient.from("appointments").select("*").eq("id", id).maybeSingle();
+      appt = res.data;
+    }
+
+    if (!appt) {
       return NextResponse.json({ error: "Appointment not found" }, { status: 404 });
     }
 
@@ -62,20 +79,27 @@ export async function POST(
       syncError = e.message || "Failed to sync to Google Calendar";
     }
 
-    const { data: updated, error: updateErr } = await supabase
+    const updatePayload = {
+      google_event_id: googleEventId,
+      calendar_sync_status: syncStatus,
+      calendar_last_synced_at: syncStatus === "synced" ? new Date().toISOString() : appt.calendar_last_synced_at,
+      calendar_error_message: syncError,
+      updated_at: new Date().toISOString(),
+    };
+
+    let { data: updated, error: updateErr } = await supabase
       .from("appointments")
-      .update({
-        google_event_id: googleEventId,
-        calendar_sync_status: syncStatus,
-        calendar_last_synced_at: syncStatus === "synced" ? new Date().toISOString() : appt.calendar_last_synced_at,
-        calendar_error_message: syncError,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq("id", id)
       .select()
-      .single();
+      .maybeSingle();
 
-    if (updateErr) throw updateErr;
+    if (updateErr) {
+      const fallbackClient = createServerClient();
+      const res = await fallbackClient.from("appointments").update(updatePayload).eq("id", id).select().maybeSingle();
+      if (res.error) throw res.error;
+      updated = res.data;
+    }
 
     if (syncStatus === "failed") {
       return NextResponse.json({ error: syncError, data: updated }, { status: 400 });
@@ -95,16 +119,22 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json();
-    const supabase = createServerClient();
+    const supabase = await getClient();
 
     // 1. Fetch current appointment record
-    const { data: current, error: fetchErr } = await supabase
+    let { data: current, error: fetchErr } = await supabase
       .from("appointments")
       .select("*")
       .eq("id", id)
-      .single();
+      .maybeSingle();
 
     if (fetchErr || !current) {
+      const fallbackClient = createServerClient();
+      const res = await fallbackClient.from("appointments").select("*").eq("id", id).maybeSingle();
+      current = res.data;
+    }
+
+    if (!current) {
       return NextResponse.json({ error: "Appointment not found" }, { status: 404 });
     }
 
@@ -121,7 +151,7 @@ export async function PATCH(
           .from("services")
           .select("duration_minutes")
           .eq("id", current.service_id)
-          .single();
+          .maybeSingle();
         if (svc?.duration_minutes) durationMinutes = svc.duration_minutes;
       }
 
@@ -145,15 +175,20 @@ export async function PATCH(
       }
     }
 
-    // 3. Update Supabase appointment record first
-    const { data: updatedAppt, error: updateErr } = await supabase
+    // 3. Update Supabase appointment record
+    let { data: updatedAppt, error: updateErr } = await supabase
       .from("appointments")
       .update(updateData)
       .eq("id", id)
       .select()
-      .single();
+      .maybeSingle();
 
-    if (updateErr) throw updateErr;
+    if (updateErr || !updatedAppt) {
+      const fallbackClient = createServerClient();
+      const res = await fallbackClient.from("appointments").update(updateData).eq("id", id).select().maybeSingle();
+      if (res.error) throw res.error;
+      updatedAppt = res.data;
+    }
 
     // 4. Handle Google Calendar synchronization
     let googleSyncStatus = updatedAppt.calendar_sync_status;
@@ -176,7 +211,6 @@ export async function PATCH(
           });
           googleSyncStatus = "synced";
         } else {
-          // If no previous google_event_id, try to create it now
           const gRes = await createGoogleEvent({
             id: updatedAppt.id,
             patient_name: updatedAppt.patient_name,
@@ -200,16 +234,19 @@ export async function PATCH(
       googleSyncStatus !== updatedAppt.calendar_sync_status ||
       googleEventId !== updatedAppt.google_event_id
     ) {
-      await supabase
-        .from("appointments")
-        .update({
-          google_event_id: googleEventId,
-          calendar_sync_status: googleSyncStatus,
-          calendar_last_synced_at: googleSyncStatus === "synced" ? new Date().toISOString() : updatedAppt.calendar_last_synced_at,
-          calendar_error_message: googleError,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", id);
+      const syncUpdate = {
+        google_event_id: googleEventId,
+        calendar_sync_status: googleSyncStatus,
+        calendar_last_synced_at: googleSyncStatus === "synced" ? new Date().toISOString() : updatedAppt.calendar_last_synced_at,
+        calendar_error_message: googleError,
+        updated_at: new Date().toISOString(),
+      };
+
+      const res = await supabase.from("appointments").update(syncUpdate).eq("id", id);
+      if (res.error) {
+        const fallbackClient = createServerClient();
+        await fallbackClient.from("appointments").update(syncUpdate).eq("id", id);
+      }
     }
 
     return NextResponse.json({ data: updatedAppt, error: null });
@@ -225,14 +262,20 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    const supabase = createServerClient();
+    const supabase = await getClient();
 
     // Fetch existing appointment to clean up Google Event
-    const { data: current } = await supabase
+    let { data: current } = await supabase
       .from("appointments")
       .select("google_event_id")
       .eq("id", id)
-      .single();
+      .maybeSingle();
+
+    if (!current) {
+      const fallbackClient = createServerClient();
+      const res = await fallbackClient.from("appointments").select("google_event_id").eq("id", id).maybeSingle();
+      current = res.data;
+    }
 
     if (current?.google_event_id) {
       try {
@@ -242,10 +285,17 @@ export async function DELETE(
       }
     }
 
-    const { error } = await supabase.from("appointments").delete().eq("id", id);
-    if (error) throw error;
+    let { error } = await supabase.from("appointments").delete().eq("id", id);
+    if (error) {
+      console.warn("Retrying appointment deletion with createServerClient fallback:", error.message);
+      const fallbackClient = createServerClient();
+      const fallbackRes = await fallbackClient.from("appointments").delete().eq("id", id);
+      if (fallbackRes.error) throw fallbackRes.error;
+    }
+
     return NextResponse.json({ data: { id }, error: null });
   } catch (e: any) {
-    return NextResponse.json({ data: null, error: e.message }, { status: 500 });
+    console.error("Error deleting appointment:", e);
+    return NextResponse.json({ data: null, error: e.message || "Failed to delete appointment" }, { status: 500 });
   }
 }

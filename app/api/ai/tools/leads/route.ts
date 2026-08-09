@@ -23,14 +23,72 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json();
-    const { name, email, phone, service, conversationId } = body;
+    const rawBody = await request.json();
+    const payload =
+      rawBody.lead ||
+      rawBody.data ||
+      rawBody.parameters ||
+      rawBody.args ||
+      rawBody.json ||
+      rawBody;
 
-    if (!name || typeof name !== "string" || !name.trim()) {
-      return NextResponse.json(
-        { success: false, error: "Name is required." },
-        { status: 400 }
-      );
+    let rawName =
+      payload.name ||
+      payload.full_name ||
+      payload.fullName ||
+      payload.patient_name ||
+      payload.patientName ||
+      payload.contact_name ||
+      "";
+
+    let rawEmail =
+      payload.email ||
+      payload.email_address ||
+      payload.emailAddress ||
+      payload.user_email ||
+      "";
+
+    let rawPhone =
+      payload.phone ||
+      payload.phone_number ||
+      payload.phoneNumber ||
+      payload.mobile ||
+      payload.contact_phone ||
+      "";
+
+    const service = payload.service || payload.service_name || payload.serviceName || rawBody.service;
+    const conversationId = payload.conversationId || payload.conversation_id || rawBody.conversationId;
+
+    let name = typeof rawName === "string" ? rawName.trim() : "";
+    let email = typeof rawEmail === "string" ? rawEmail.trim() : "";
+    let phone = typeof rawPhone === "string" ? rawPhone.trim() : "";
+
+    const isEmailFormat = (val: string) => val.includes("@");
+
+    // If name is an email address, extract it into email and clear name
+    if (name && isEmailFormat(name)) {
+      if (!email) {
+        email = name;
+      }
+      name = "";
+    }
+
+    // Derive human name if missing or cleared, ensuring email is never saved in the name column
+    if (!name) {
+      if (email && email.includes("@")) {
+        const localPart = email.split("@")[0];
+        const formatted = localPart
+          .replace(/[._-]+/g, " ")
+          .split(" ")
+          .filter(Boolean)
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+          .join(" ");
+        name = formatted || "AI Chat Guest";
+      } else if (phone) {
+        name = `Guest (${phone})`;
+      } else {
+        name = "AI Chat Guest";
+      }
     }
 
     let supabase;
@@ -70,9 +128,9 @@ export async function POST(request: Request) {
         reference,
         source: "ai_chat",
         status: "new",
-        name: name.trim(),
-        email: email ? String(email).trim() : null,
-        phone: phone ? String(phone).trim() : null,
+        name,
+        email: email || null,
+        phone: phone || null,
         service_id: serviceId,
       });
 
