@@ -34,20 +34,35 @@ export async function testGoogleCalendarConnection(
   calendarId: string = "primary",
   timeZone: string = "America/Chicago"
 ) {
-  const calendar = getGoogleCalendarClient(encryptedRefreshToken);
-  const timeMin = new Date().toISOString();
-  const timeMax = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const calendar = getGoogleCalendarClient(encryptedRefreshToken);
+    const timeMin = new Date().toISOString();
+    const timeMax = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-  const response = await calendar.freebusy.query({
-    requestBody: {
-      timeMin,
-      timeMax,
-      timeZone,
-      items: [{ id: calendarId }],
-    },
-  });
+    const response = await calendar.freebusy.query({
+      requestBody: {
+        timeMin,
+        timeMax,
+        timeZone,
+        items: [{ id: calendarId }],
+      },
+    });
 
-  return response.data;
+    return response.data;
+  } catch (err: any) {
+    const errorMsg =
+      err?.response?.data?.error_description ||
+      err?.response?.data?.error?.message ||
+      err?.message ||
+      "Unknown Google Calendar error";
+
+    if (errorMsg.includes("invalid_grant") || err?.message?.includes("invalid_grant")) {
+      throw new Error(
+        "Google authorization has expired or was revoked (invalid_grant). Please click 'Connect Google Calendar' to re-authorize."
+      );
+    }
+    throw new Error(errorMsg);
+  }
 }
 
 function getTargetCalendarId(dbCalendarId?: string | null): string {

@@ -152,8 +152,24 @@ export async function POST(request: Request) {
         try {
           const headers: Record<string, string> = {
             "Content-Type": "application/json",
-            "X-William-Dentist-Secret": process.env.N8N_WEBHOOK_SECRET || "",
           };
+
+          const webhookSecret = process.env.N8N_WEBHOOK_SECRET;
+          const webhookUser = process.env.N8N_WEBHOOK_USER;
+          const webhookPass = process.env.N8N_WEBHOOK_PASSWORD;
+
+          if (webhookUser && webhookPass) {
+            const basicAuth = Buffer.from(`${webhookUser}:${webhookPass}`).toString("base64");
+            headers["Authorization"] = `Basic ${basicAuth}`;
+          } else if (webhookSecret && webhookSecret !== "YOUR_SECRET_HERE") {
+            if (webhookSecret.includes(":") && !webhookSecret.startsWith("http")) {
+              const basicAuth = Buffer.from(webhookSecret).toString("base64");
+              headers["Authorization"] = `Basic ${basicAuth}`;
+            } else {
+              headers["Authorization"] = `Bearer ${webhookSecret}`;
+            }
+            headers["X-William-Dentist-Secret"] = webhookSecret;
+          }
 
           const webhookRes = await fetch(webhookUrl, {
             method: "POST",
@@ -179,7 +195,8 @@ export async function POST(request: Request) {
           aiReply = extractedReply || (typeof rawData === "string" ? rawData : JSON.stringify(rawData));
         } catch (webhookErr) {
           console.error("Error communicating with n8n AI Webhook:", webhookErr);
-          aiReply = "I am currently unable to reach our AI assistant. Please contact the clinic directly at +1 (555) 123-4567 or try again shortly.";
+          // Fallback to mock response so website visitors still get helpful dental assistant answers
+          aiReply = generateMockResponse(trimmedUserMsg);
         }
       }
     } else {

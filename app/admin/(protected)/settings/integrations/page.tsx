@@ -223,6 +223,15 @@ export default function IntegrationsPage() {
           ) : (
             /* Not Connected View */
             <div className="space-y-6">
+              {data?.status === "error" && data?.lastError && (
+                <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 flex items-start gap-2.5">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-600" />
+                  <div>
+                    <p className="font-semibold text-red-900">Connection Error</p>
+                    <p className="mt-0.5">{data.lastError}</p>
+                  </div>
+                </div>
+              )}
               <p className="text-sm text-slate-600">
                 Connect your clinic&apos;s Google Calendar to automatically block off busy time slots on the booking page and create calendar events for new patient appointments.
               </p>
@@ -232,7 +241,7 @@ export default function IntegrationsPage() {
                   className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-cyan-600 text-white text-sm font-semibold hover:bg-cyan-500 shadow-sm transition-colors"
                 >
                   <Calendar className="h-4 w-4" />
-                  Connect Google Calendar
+                  {data?.status === "error" ? "Reconnect Google Calendar" : "Connect Google Calendar"}
                 </a>
               </div>
             </div>

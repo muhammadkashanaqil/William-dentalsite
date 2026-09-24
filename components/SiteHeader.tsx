@@ -25,9 +25,7 @@ export function SiteHeader() {
           {/* Logo */}
           <div className="flex-shrink-0">
             <Link href="/" className="flex items-center gap-2">
-              <span className="font-serif text-2xl font-bold tracking-tight text-gray-900">
-                William <span className="text-cyan-600">Dentist</span>
-              </span>
+              <img src="/logo.png" alt="William Dentist Logo" className="h-10 w-auto object-contain" />
             </Link>
           </div>
 
